@@ -8,17 +8,37 @@ const PRICES_PATH = "/api/v1/pfs/fuel-prices";
 const TIMEOUT_MS = 15000;
 const MAX_BATCHES = 100;
 
-const headers = {
-  "Content-Type": "application/json",
+const RESPONSE_HEADERS = {
+  "Content-Type": "application/json; charset=utf-8",
   "Cache-Control": "no-store",
 };
 
-function response(statusCode, body) {
+function sendResponse(statusCode, body) {
   return {
     statusCode,
-    headers,
+    headers: RESPONSE_HEADERS,
     body: JSON.stringify(body),
   };
+}
+
+function redactSensitiveData(value) {
+  if (typeof value !== "string") {
+    return "";
+  }
+
+  return value
+    .replace(
+      /("(?:client_secret|access_token|refresh_token|client_id)"\s*:\s*)"[^"]*"/gi,
+      '$1"[REDACTED]"'
+    )
+    .replace(
+      /("(?:authorization|cookie|set-cookie)"\s*:\s*)"[^"]*"/gi,
+      '$1"[REDACTED]"'
+    )
+    .replace(
+      /(Bearer\s+)[A-Za-z0-9._~+/-]+=*/gi,
+      "$1[REDACTED]"
+    );
 }
 
 async function fetchWithTimeout(url, options = {}) {
@@ -38,42 +58,56 @@ async function fetchWithTimeout(url, options = {}) {
   }
 }
 
-async function readJsonSafely(res) {
-  const text = await res.text();
+async function readResponse(res) {
+  const raw = await res.text();
 
-  if (!text) {
-    return {
-      data: null,
-      raw: "",
-    };
+  let data = null;
+
+  if (raw) {
+    try {
+      data = JSON.parse(raw);
+    } catch {
+      // The response was not valid JSON.
+    }
   }
 
-  try {
-    return {
-      data: JSON.parse(text),
-      raw: text,
-    };
-  } catch {
-    return {
-      data: null,
-      raw: text,
-    };
-  }
+  return { raw, data };
 }
 
-async function getAccessToken() {
+function getConfiguration() {
   if (!API_BASE || !CLIENT_ID || !CLIENT_SECRET) {
     throw new Error(
-      "Missing configuration. Check FUEL_FINDER_API_BASE_URL, " +
-      "FUEL_FINDER_CLIENT_ID and FUEL_FINDER_CLIENT_SECRET " +
-      "in Netlify environment variables."
+      "Missing environment variables. Check " +
+      "FUEL_FINDER_API_BASE_URL, FUEL_FINDER_CLIENT_ID, " +
+      "and FUEL_FINDER_CLIENT_SECRET in Netlify."
     );
   }
 
-  const baseUrl = API_BASE.replace(/\/+$/, "");
+  let parsedUrl;
+
+  try {
+    parsedUrl = new URL(API_BASE);
+  } catch {
+    throw new Error(
+      "FUEL_FINDER_API_BASE_URL is not a valid URL."
+    );
+  }
+
+  if (parsedUrl.protocol !== "https:") {
+    throw new Error(
+      "FUEL_FINDER_API_BASE_URL must use HTTPS."
+    );
+  }
+
+  return {
+    baseUrl: API_BASE.replace(/\/+$/, ""),
+  };
+}
+
+async function getAccessToken(baseUrl) {
   const tokenUrl = `${baseUrl}${TOKEN_PATH}`;
 
-  console.log("Fuel Finder authentication started.");
+  console.log("Starting Fuel Finder authentication.");
 
   let res;
 
@@ -91,25 +125,35 @@ async function getAccessToken() {
     });
   } catch (error) {
     if (error.name === "AbortError") {
-      throw new Error("Fuel Finder token request timed out.");
+      throw new Error(
+        "Fuel Finder authentication request timed out."
+      );
     }
 
+    console.error("Fuel Finder connection failed:", {
+      errorName: error.name,
+    });
+
     throw new Error(
-      "Could not connect to the Fuel Finder token endpoint."
+      "Could not connect to the Fuel Finder authentication endpoint."
     );
   }
 
-  const result = await readJsonSafely(res);
+  const result = await readResponse(res);
 
-  // Never log credentials, tokens, or the complete response body.
-  console.log("Fuel Finder token response:", {
-    status: res.status,
+  console.log("Fuel Finder token endpoint diagnostic:", {
+    httpStatus: res.status,
     contentType: res.headers.get("content-type"),
-    validJson: result.data !== null,
     responseLength: result.raw.length,
+    validJson: result.data !== null,
   });
 
   if (!res.ok) {
+    console.error("Fuel Finder authentication rejection:", {
+      httpStatus: res.status,
+      response: redactSensitiveData(result.raw).slice(0, 1000),
+    });
+
     throw new Error(
       `Fuel Finder authentication failed with HTTP ${res.status}.`
     );
@@ -125,8 +169,12 @@ async function getAccessToken() {
   const accessToken = payload.access_token;
 
   if (!accessToken) {
+    console.error(
+      "Fuel Finder response did not contain an access token."
+    );
+
     throw new Error(
-      "Fuel Finder responded successfully but no access token was found."
+      "Fuel Finder did not return an access token."
     );
   }
 
@@ -135,8 +183,7 @@ async function getAccessToken() {
   return accessToken;
 }
 
-async function getPriceBatch(batchNumber, accessToken) {
-  const baseUrl = API_BASE.replace(/\/+$/, "");
+async function getPriceBatch(baseUrl, batchNumber, accessToken) {
   const url = new URL(`${baseUrl}${PRICES_PATH}`);
 
   url.searchParams.set("batch-number", String(batchNumber));
@@ -163,16 +210,17 @@ async function getPriceBatch(batchNumber, accessToken) {
     );
   }
 
-  const result = await readJsonSafely(res);
+  const result = await readResponse(res);
 
   if (!res.ok) {
-    console.error("Fuel Finder price request failed:", {
-      status: res.status,
+    console.error("Fuel Finder price endpoint rejection:", {
+      httpStatus: res.status,
       batchNumber,
+      response: redactSensitiveData(result.raw).slice(0, 1000),
     });
 
     throw new Error(
-      `Fuel Finder prices request failed with HTTP ${res.status}.`
+      `Fuel Finder price request failed with HTTP ${res.status}.`
     );
   }
 
@@ -194,30 +242,36 @@ function extractRecords(payload) {
     return [];
   }
 
-  if (Array.isArray(payload.data)) {
-    return payload.data;
-  }
+  const possibleArrays = [
+    payload.data,
+    payload.stations,
+    payload.results,
+    payload.fuel_prices,
+  ];
 
-  if (Array.isArray(payload.stations)) {
-    return payload.stations;
-  }
-
-  if (Array.isArray(payload.results)) {
-    return payload.results;
-  }
-
-  if (Array.isArray(payload.fuel_prices)) {
-    return payload.fuel_prices;
+  for (const item of possibleArrays) {
+    if (Array.isArray(item)) {
+      return item;
+    }
   }
 
   return [];
 }
 
-async function getAllPrices(accessToken) {
+async function getAllPrices(baseUrl, accessToken) {
   const allPrices = [];
 
-  for (let batchNumber = 1; batchNumber <= MAX_BATCHES; batchNumber++) {
-    const payload = await getPriceBatch(batchNumber, accessToken);
+  for (
+    let batchNumber = 1;
+    batchNumber <= MAX_BATCHES;
+    batchNumber++
+  ) {
+    const payload = await getPriceBatch(
+      baseUrl,
+      batchNumber,
+      accessToken
+    );
+
     const records = extractRecords(payload);
 
     if (records.length === 0) {
@@ -226,7 +280,6 @@ async function getAllPrices(accessToken) {
 
     allPrices.push(...records);
 
-    // Stop when the API returns fewer than a full batch.
     if (records.length < 500) {
       break;
     }
@@ -237,25 +290,33 @@ async function getAllPrices(accessToken) {
 
 exports.handler = async function (event) {
   if (event.httpMethod !== "GET") {
-    return response(405, {
+    return sendResponse(405, {
       success: false,
       error: "Method not allowed. Use GET.",
     });
   }
 
   try {
-    const accessToken = await getAccessToken();
-    const prices = await getAllPrices(accessToken);
+    const { baseUrl } = getConfiguration();
 
-    return response(200, {
+    const accessToken = await getAccessToken(baseUrl);
+
+    const prices = await getAllPrices(
+      baseUrl,
+      accessToken
+    );
+
+    return sendResponse(200, {
       success: true,
       count: prices.length,
       data: prices,
     });
   } catch (error) {
-    console.error("FuelScout prices function failed:", error.message);
+    console.error("FuelScout prices function failed:", {
+      message: error.message,
+    });
 
-    return response(502, {
+    return sendResponse(502, {
       success: false,
       error: error.message,
     });
