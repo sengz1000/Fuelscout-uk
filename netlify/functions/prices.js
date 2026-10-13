@@ -75,7 +75,7 @@ async function requestToken(clientId, clientSecret) {
   const response = await fetchWithTimeout(TOKEN_URL, {
     method: "POST",
     headers: {
-      "Content-Type": "application/json",
+      "Content-Type": "application/x-www-form-urlencoded",
       "Accept": "application/json"
     },
     body: body.toString()
@@ -224,3 +224,6 @@ exports.handler = async function () {
     };
   }
 };
+  
+ 
+   
