@@ -1,12 +1,13 @@
-const API_BASE = process.env.FUEL_FINDER_API_BASE_URL;
-const CLIENT_ID = process.env.FUEL_FINDER_CLIENT_ID;
-const CLIENT_SECRET = process.env.FUEL_FINDER_CLIENT_SECRET;
+const API_BASE = process.env.FUEL_FINDER_API_BASE_URL?.trim();
+const CLIENT_ID = process.env.FUEL_FINDER_CLIENT_ID?.trim();
+const CLIENT_SECRET = process.env.FUEL_FINDER_CLIENT_SECRET?.trim();
 
 const TOKEN_PATH = "/api/v1/oauth/generate_access_token";
 const PRICES_PATH = "/api/v1/pfs/fuel-prices";
 
 const TIMEOUT_MS = 15000;
 const MAX_BATCHES = 100;
+const USER_AGENT = "FuelScout/1.0";
 
 const RESPONSE_HEADERS = {
   "Content-Type": "application/json; charset=utf-8",
@@ -117,6 +118,7 @@ async function getAccessToken(baseUrl) {
       headers: {
         "Content-Type": "application/json",
         Accept: "application/json",
+        "User-Agent": USER_AGENT,
       },
       body: JSON.stringify({
         client_id: CLIENT_ID,
@@ -196,6 +198,7 @@ async function getPriceBatch(baseUrl, batchNumber, accessToken) {
       headers: {
         Accept: "application/json",
         Authorization: `Bearer ${accessToken}`,
+        "User-Agent": USER_AGENT,
       },
     });
   } catch (error) {
