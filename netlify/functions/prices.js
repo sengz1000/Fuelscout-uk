@@ -1,4 +1,3 @@
-
 const API_BASE = (
   process.env.FUEL_FINDER_API_BASE_URL ||
   "https://www.fuel-finder.service.gov.uk"
@@ -11,7 +10,6 @@ const PRICES_URL = `${API_BASE}/api/v1/pfs/fuel-prices`;
 exports.handler = async function () {
   const clientId = process.env.FUEL_FINDER_CLIENT_ID;
   const clientSecret = process.env.FUEL_FINDER_CLIENT_SECRET;
-  const refreshToken = process.env.FUEL_FINDER_REFRESH_TOKEN;
 
   const headers = {
     "content-type": "application/json",
@@ -20,63 +18,73 @@ exports.handler = async function () {
 
   try {
     if (!clientId || !clientSecret) {
-      throw new Error("Fuel Finder credentials are not configured.");
+      throw new Error(
+        "Fuel Finder credentials are not configured."
+      );
     }
 
     async function requestToken(url, payload) {
       const response = await fetch(url, {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: {
+          "content-type": "application/json",
+          accept: "application/json"
+        },
         body: JSON.stringify(payload)
       });
 
-     const responseText = await response.text();
+      const responseText = await response.text();
+      let result = null;
 
-let result;
+      try {
+        if (responseText.trim()) {
+          result = JSON.parse(responseText);
+        }
+      } catch {
+        if (!response.ok) {
+          throw new Error(
+            `Fuel Finder token request failed ` +
+            `(HTTP ${response.status}). ` +
+            `Response: ${responseText.slice(0, 250)}`
+          );
+        }
 
-try {
-  result = JSON.parse(responseText);
-} catch {
-  throw new Error(
-    `Fuel Finder authentication returned invalid or empty JSON (HTTP ${response.status}).`
-  );
-}
+        throw new Error(
+          `Fuel Finder returned invalid JSON ` +
+          `(HTTP ${response.status}).`
+        );
+      }
 
-if (!response.ok || result.success === false) {
-  throw new Error(
-    `Fuel Finder authentication failed (HTTP ${response.status}).`
-  );
-}
+      if (!response.ok || result?.success === false) {
+        const detail =
+          result?.message ||
+          result?.error ||
+          responseText.slice(0, 250) ||
+          "Empty response";
 
-      const data = result.data || result;
+        throw new Error(
+          `Fuel Finder token request failed ` +
+          `(HTTP ${response.status}). ${detail}`
+        );
+      }
 
-      if (!data.access_token) {
-        throw new Error("No access token was returned.");
+      const data = result?.data || result;
+
+      if (!data?.access_token) {
+        throw new Error(
+          "Fuel Finder response did not contain an access token."
+        );
       }
 
       return data.access_token;
     }
 
-    let accessToken;
-
-    if (refreshToken) {
-      try {
-        accessToken = await requestToken(REFRESH_URL, {
-          client_id: clientId,
-          refresh_token: refreshToken
-        });
-      } catch {
-        accessToken = await requestToken(TOKEN_URL, {
-          client_id: clientId,
-          client_secret: clientSecret
-        });
-      }
-    } else {
-      accessToken = await requestToken(TOKEN_URL, {
-        client_id: clientId,
-        client_secret: clientSecret
-      });
-    }
+    // Diagnostic test: use client credentials directly.
+    // Refresh-token authentication is temporarily bypassed.
+    const accessToken = await requestToken(TOKEN_URL, {
+      client_id: clientId,
+      client_secret: clientSecret
+    });
 
     const stations = [];
     let batchNumber = 1;
@@ -94,34 +102,41 @@ if (!response.ok || result.success === false) {
 
       const responseText = await response.text();
 
-if (!response.ok) {
-  throw new Error(
-    `Fuel price request failed (${response.status}): ${responseText.slice(0, 300)}`
-  );
-}
+      if (!response.ok) {
+        throw new Error(
+          `Fuel price request failed ` +
+          `(HTTP ${response.status}): ` +
+          responseText.slice(0, 250)
+        );
+      }
 
-if (!responseText.trim()) {
-  throw new Error(
-    `Fuel Finder returned an empty response for batch ${batchNumber}.`
-  );
-}
+      if (!responseText.trim()) {
+        throw new Error(
+          `Fuel Finder returned an empty response ` +
+          `for batch ${batchNumber}.`
+        );
+      }
 
-let batch;
+      let batch;
 
-try {
-  batch = JSON.parse(responseText);
-} catch {
-  throw new Error(
-    `Fuel Finder returned invalid JSON for batch ${batchNumber}.`
-  );
-}
+      try {
+        batch = JSON.parse(responseText);
+      } catch {
+        throw new Error(
+          `Fuel Finder returned invalid JSON ` +
+          `for batch ${batchNumber}.`
+        );
+      }
 
-
-      if (!Array.isArray(batch) || batch.length === 0) break;
+      if (!Array.isArray(batch) || batch.length === 0) {
+        break;
+      }
 
       stations.push(...batch);
 
-      if (batch.length < 500) break;
+      if (batch.length < 500) {
+        break;
+      }
 
       batchNumber++;
     }
@@ -136,14 +151,17 @@ try {
       })
     };
   } catch (error) {
-    console.error("FuelScout prices error:", error.message);
+    console.error(
+      "FuelScout prices error:",
+      error.message
+    );
 
     return {
       statusCode: 502,
       headers,
       body: JSON.stringify({
         error: "FUEL_DATA_UNAVAILABLE",
-        message: "Live fuel prices could not be retrieved. Please try again later.",
+        message: error.message,
         stations: []
       })
     };
