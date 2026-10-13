@@ -75,7 +75,7 @@ async function requestToken(clientId, clientSecret) {
   const response = await fetchWithTimeout(TOKEN_URL, {
     method: "POST",
     headers: {
-      "Content-Type": "application/x-www-form-urlencoded",
+      "Content-Type": "application/json",
       "Accept": "application/json"
     },
     body: body.toString()
