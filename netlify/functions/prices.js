@@ -30,11 +30,23 @@ exports.handler = async function () {
         body: JSON.stringify(payload)
       });
 
-      const result = await response.json();
+     const responseText = await response.text();
 
-      if (!response.ok || result.success === false) {
-        throw new Error("Fuel Finder authentication failed.");
-      }
+let result;
+
+try {
+  result = JSON.parse(responseText);
+} catch {
+  throw new Error(
+    `Fuel Finder authentication returned invalid or empty JSON (HTTP ${response.status}).`
+  );
+}
+
+if (!response.ok || result.success === false) {
+  throw new Error(
+    `Fuel Finder authentication failed (HTTP ${response.status}).`
+  );
+}
 
       const data = result.data || result;
 
