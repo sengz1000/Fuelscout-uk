@@ -80,11 +80,30 @@ exports.handler = async function () {
         }
       );
 
-      if (!response.ok) {
-        throw new Error(`Fuel price request failed (${response.status}).`);
-      }
+      const responseText = await response.text();
 
-      const batch = await response.json();
+if (!response.ok) {
+  throw new Error(
+    `Fuel price request failed (${response.status}): ${responseText.slice(0, 300)}`
+  );
+}
+
+if (!responseText.trim()) {
+  throw new Error(
+    `Fuel Finder returned an empty response for batch ${batchNumber}.`
+  );
+}
+
+let batch;
+
+try {
+  batch = JSON.parse(responseText);
+} catch {
+  throw new Error(
+    `Fuel Finder returned invalid JSON for batch ${batchNumber}.`
+  );
+}
+
 
       if (!Array.isArray(batch) || batch.length === 0) break;
 
