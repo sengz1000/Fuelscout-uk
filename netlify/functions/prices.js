@@ -115,6 +115,7 @@ async function getAccessToken(baseUrl) {
   try {
     res = await fetchWithTimeout(tokenUrl, {
       method: "POST",
+      redirect: "manual",
       headers: {
         "Content-Type": "application/json",
         Accept: "application/json",
@@ -144,7 +145,14 @@ async function getAccessToken(baseUrl) {
   const result = await readResponse(res);
 
   console.log("Fuel Finder token endpoint diagnostic:", {
+    baseHost: new URL(baseUrl).host,
+    finalUrl: res.url,
+    redirected: res.redirected,
     httpStatus: res.status,
+    location: res.headers.get("location"),
+    server: res.headers.get("server"),
+    via: res.headers.get("via"),
+    xCache: res.headers.get("x-cache"),
     contentType: res.headers.get("content-type"),
     responseLength: result.raw.length,
     validJson: result.data !== null,
